@@ -20,6 +20,10 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertTrue;
@@ -159,20 +163,102 @@ public class Main {
         System.out.println("\n");
     }
     private static String getPath(String nodeSource, String nodeTarget){
-        // List to store the visited path
-        List<String> path = new ArrayList<>();
-        // Set to track visited nodes to prevent cycles
-        Set<String> visited = new HashSet<>();
+        if(!parallelComp) {
+            List<String> path = new ArrayList<>();
+            Set<String> visited = new HashSet<>();
+            if (dfsFindPath(nodeSource, nodeTarget, visited, path)) {
+                return String.join(" -> ", path); // Construct the path as a string
+            } else {
+                return "No path found from " + nodeSource + " to " + nodeTarget;
+            }
+        }
+        else{
+            // perform multithread dfs with 2 worker threads for each branching path
+            // Multithreaded DFS
+            List<String> path = new ArrayList<>();
+            if (parallelDfsFindPath(nodeSource, nodeTarget, path)) {
+                return String.join(" -> ", path);
+            } else {
+                return "No path found from " + nodeSource + " to " + nodeTarget;
+            }
 
-        // Perform DFS to find the path
-        if (dfsFindPath(nodeSource, nodeTarget, visited, path)) {
-            return String.join(" -> ", path);  // Construct the path as a string
-        } else {
-            return "No path found from " + nodeSource + " to " + nodeTarget;
         }
     }
 
-    // Helper method to perform DFS and find a valid path
+    private static boolean parallelDfsFindPath(String nodeSource, String nodeTarget, List<String> path) {
+        ExecutorService executor = Executors.newFixedThreadPool(4); // Create thread pool
+        AtomicBoolean foundPath = new AtomicBoolean(false); // Flag to stop threads when a path is found
+        ConcurrentHashMap<String, Boolean> visited = new ConcurrentHashMap<>(); // Thread-safe visited set
+        List<String> concurrentPath = Collections.synchronizedList(new ArrayList<>()); // Thread-safe path
+
+        // Start searching from the source node
+        executor.submit(() -> dfsFindPathThread(nodeSource, nodeTarget, visited, concurrentPath, foundPath));
+
+        // Wait for threads to complete or terminate early if a path is found
+        executor.shutdown();
+        try {
+            executor.awaitTermination(10, TimeUnit.SECONDS); // Wait for completion (adjust timeout if needed)
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            e.printStackTrace();
+        }
+
+        // Copy the result (if found) back to the original path list
+        if (foundPath.get()) {
+            synchronized (concurrentPath) {
+                path.addAll(concurrentPath);
+            }
+            return true;
+        }
+
+        return false; // No path found
+    }
+
+    private static boolean dfsFindPathThread(
+            String currentNode,
+            String nodeTarget,
+            ConcurrentHashMap<String, Boolean> visited,
+            List<String> concurrentPath,
+            AtomicBoolean foundPath) {
+
+        // If a path has already been found by another thread, stop further processing
+        if (foundPath.get()) {
+            return false;
+        }
+
+        // Mark this node as visited (thread-safe)
+        visited.put(currentNode, true);
+
+        // Add node to the synchronized path
+        synchronized (concurrentPath) {
+            concurrentPath.add(currentNode);
+        }
+
+        // Base case: we've reached the target node
+        if (currentNode.equals(nodeTarget)) {
+            foundPath.set(true); // Signal that a path has been found
+            return true;
+        }
+
+        // Explore neighbors for the current node
+        for (String neighbor : adjList.getOrDefault(currentNode, new ArrayList<>())) {
+            // Avoid revisiting nodes (check the thread-safe visited map)
+            if (!visited.containsKey(neighbor) && !foundPath.get()) {
+                boolean pathFound = dfsFindPathThread(neighbor, nodeTarget, visited, concurrentPath, foundPath);
+                if (pathFound) {
+                    return true; // Exit early if a valid path is found
+                }
+            }
+        }
+
+        // Backtrack: remove the current node from the path if this branch fails
+        synchronized (concurrentPath) {
+            concurrentPath.remove(currentNode);
+        }
+
+        return false;
+    }
+
     private static boolean dfsFindPath(String current, String target, Set<String> visited, List<String> path) {
         path.add(current);  // Add the current node to the path
         visited.add(current);  // Mark the current node as visited
@@ -194,7 +280,6 @@ public class Main {
         path.remove(path.size() - 1);
         return false;
     }
-
 
     private static void visualizeGraph(){
         JGraphXAdapter<String, DefaultEdge> graphAdapter =
