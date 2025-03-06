@@ -4,6 +4,7 @@
 import com.mxgraph.layout.mxCircleLayout;
 import com.mxgraph.layout.mxIGraphLayout;
 import com.mxgraph.util.mxCellRenderer;
+import org.antlr.v4.runtime.misc.Pair;
 import org.jgrapht.DirectedGraph;
 import org.jgrapht.Graph;
 import org.jgrapht.ext.JGraphXAdapter;
@@ -25,12 +26,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 
 public class Main {
-    private static Map<String, List<String>> adjList =  new HashMap<>();
+    private static Map<String, Map<String, Integer>> adjList =  new HashMap<>();
     private static DirectedGraph<String, DefaultEdge> directedGraph
             = new DefaultDirectedGraph<>(DefaultEdge.class);
 
     private static boolean parallelComp = false;
-    private static final String file = "src/graph-sq-100";
+    private static final String file = "src/graph.txt";
 
     public static void main(String[] args) {
         parseFile();
@@ -155,14 +156,15 @@ public class Main {
         if (data.startsWith("*")) {
             String[] parts = parseInput(data, 2, "wrong parse");
             String node = parts[1];
-            adjList.putIfAbsent(node, new ArrayList<>());
+            adjList.putIfAbsent(node, new HashMap<>());
             directedGraph.addVertex(node);
         }
         else if (data.startsWith("-")) {
-            String[] parts = parseInput(data, 3, "wrong parse");
+            String[] parts = parseInput(data, 4, "wrong parse");
             String nodeSource = parts[1];
             String nodeTarget = parts[2];
-            adjList.get(nodeSource).add(nodeTarget);
+            int weight = Integer.parseInt(parts[3]);
+            adjList.get(nodeSource).put(nodeTarget, weight);
             directedGraph.addEdge(nodeSource, nodeTarget);
         }
     }
@@ -171,11 +173,11 @@ public class Main {
 
         System.out.print("Edges: ");
         adjList.forEach((node, neighbors) -> {
-            for (int i = 0; i < neighbors.size(); i++) {
-                String neighbor = neighbors.get(i);
-                System.out.print("(" + node + ", " + neighbor + ")");
+            neighbors.forEach((neighbor, weight) -> {
+                System.out.print("(" + node + ", " + neighbor + ", Weight: " + weight + ")");
                 System.out.print(", ");
-            }
+            });
+
         });
 
         System.out.println("\n");
@@ -269,14 +271,17 @@ public class Main {
 
 
             List<ParallelDFS> subTasks = new ArrayList<>();
-            for (String neighbor : adjList.getOrDefault(currentNode, new ArrayList<>())) {
-                if (!localVisited.contains(neighbor) && !pathFound.get()) {
-                    ParallelDFS subTask = new ParallelDFS(neighbor, targetNode, currentPath, localVisited, pathFound, concurrentPath);
-                    subTask.fork();
-                    subTasks.add(subTask);
-                    System.out.println("Thread " + Thread.currentThread().getName() + " is spawning a task for neighbor: " + neighbor);
+            for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(currentNode, new HashMap<>()).entrySet()) {
+                String neighborNode = neighbor.getKey(); // Extract the neighbor node
+                if (!localVisited.contains(neighborNode) && !pathFound.get()) {
+                    ParallelDFS subTask = new ParallelDFS(neighborNode, targetNode, currentPath,
+                            localVisited, pathFound, concurrentPath);
+                    subTask.fork(); // Fork a new task
+                    subTasks.add(subTask); // Add the subtask to be processed later
                 }
             }
+
+
 
             for (ParallelDFS task : subTasks) {
                 if (task.join()) {
@@ -300,13 +305,15 @@ public class Main {
         }
 
         // Walk through all neighbors of the current node
-        for (String neighbor : adjList.getOrDefault(current, new ArrayList<>())) {
-            if (!visited.contains(neighbor)) {
-                if (dfsFindPath(neighbor, target, visited, path)) {
-                    return true;  // Return true if the target is found via this neighbor
+        for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(current, new HashMap<>()).entrySet()) {
+            String neighborNode = neighbor.getKey(); // Extract the neighbor node
+            if (!visited.contains(neighborNode)) {
+                if (dfsFindPath(neighborNode, target, visited, path)) {
+                    return true; // Path found
                 }
             }
         }
+
 
         // If no valid path found, backtrack
         path.remove(path.size() - 1);
@@ -379,7 +386,7 @@ public class Main {
 
 
     private static boolean checkValidEdge(String nodeSource, String nodeTarget){
-        List<String> allNeighbors = adjList.get(nodeSource).stream().toList();
+        List<String> allNeighbors = new ArrayList<>(adjList.getOrDefault(nodeSource, new HashMap<>()).keySet());
         int mid = allNeighbors.size()/2;
         List<String> firstHalf = allNeighbors.subList(0, mid);
         List<String> secondHalf = allNeighbors.subList(mid, allNeighbors.size());
