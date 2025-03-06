@@ -10,7 +10,6 @@ import org.jgrapht.ext.JGraphXAdapter;
 import org.jgrapht.graph.DefaultDirectedGraph;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleGraph;
-import org.junit.Test;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -20,13 +19,9 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.*;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.junit.Assert.assertTrue;
 
 
 public class Main {
@@ -35,6 +30,7 @@ public class Main {
             = new DefaultDirectedGraph<>(DefaultEdge.class);
 
     private static boolean parallelComp = false;
+    private static final String file = "src/graph-sq-100";
 
     public static void main(String[] args) {
         parseFile();
@@ -54,30 +50,42 @@ public class Main {
                 getEdges();
             }
             else if(input.startsWith("node ")){
-                String node = input.substring(5);
+                String[] tokenedinput = parseInput(input, 2, "wrong parse");
+                String node = tokenedinput[1];
+
+                long startTime = System.currentTimeMillis();
                 if(checkValidNode(node)){
                     System.out.println( node + " is a node\n");
                 } else{
                     System.out.println("Node not found.\n");
                 }
+                long endTime = System.currentTimeMillis();
+                System.out.println("Search took " + durationTimer(startTime, endTime) + " ms.\n");
             }
             else if(input.startsWith("edge ")){
-                String nodeSource = input.substring(5, 6);
-                String nodeTarget = input.substring(7);
+                String[] tokenedinput = parseInput(input, 3, "wrong parse");
+                String nodeSource = tokenedinput[1];
+                String nodeTarget = tokenedinput[2];
+
+                long startTime = System.currentTimeMillis();
                 if (checkValidEdge(nodeSource, nodeTarget)) {
                     System.out.println(nodeSource + " to " + nodeTarget + " is an edge\n");
                 }
                 else {
                     System.out.println("Edge not found.\n");
                 }
+                long endTime = System.currentTimeMillis();
+                System.out.println("Search took " + durationTimer(startTime, endTime) + " ms.\n");
             }
             else if(input.equals("visualize")){
                 visualizeGraph();
             }
             else if(input.startsWith("path ")){
-                String nodeSource = input.substring(5, 6);
-                String nodeTarget = input.substring(7);
+                String[] tokenedinput = parseInput(input, 3, "wrong parse");
+                String nodeSource = tokenedinput[1];
+                String nodeTarget = tokenedinput[2];
 
+                long startTime = System.currentTimeMillis();
                 if(checkValidNode(nodeSource) && checkValidNode(nodeTarget)){
                     String path = getPath(nodeSource, nodeTarget);
                     System.out.println(path);
@@ -85,6 +93,8 @@ public class Main {
                 else{
                     System.out.println("Invalid node/s.\n");
                 }
+                long endTime = System.currentTimeMillis();
+                System.out.println("Search took " + durationTimer(startTime, endTime) + " ms.\n");
             }
             else if(input.equals("exit")){
                 System.out.println("Goodbye!\n");
@@ -99,6 +109,10 @@ public class Main {
                     System.out.println("Parallel computation enabled.\n");
                 }
             }
+            else if(input.equals("load-file")){
+                parseFile();
+                System.out.println(file + " loaded successfully.\n");
+            }
             else {
                 System.out.println("Invalid command.\n");
             }
@@ -106,9 +120,24 @@ public class Main {
 
     }
 
+    private static long durationTimer(long startTime, long endTime) {
+        long duration = endTime - startTime;
+        return duration;
+    }
+
+    private static String[] parseInput(String input, int expectedParts, String errorMessage) {
+        String[] parts = input.split("\\s+"); // Split by one or more spaces
+        if (parts.length < expectedParts) { // Ensure the required number of parts
+            System.out.println(errorMessage + "\n");
+            return null; // Return null to indicate invalid input
+        }
+        return parts;
+    }
+
+
     private static void parseFile() {
         try {
-            File graphFile = new File("src/graph.txt");
+            File graphFile = new File(file);
             Scanner reader = new Scanner(graphFile);
             while (reader.hasNextLine()) {
                 String data = reader.nextLine();
@@ -124,13 +153,15 @@ public class Main {
 
     private static void processLine(String data){
         if (data.startsWith("*")) {
-            String node = data.substring(2);
+            String[] parts = parseInput(data, 2, "wrong parse");
+            String node = parts[1];
             adjList.putIfAbsent(node, new ArrayList<>());
             directedGraph.addVertex(node);
         }
         else if (data.startsWith("-")) {
-            String nodeSource = data.substring(2, 3);
-            String nodeTarget = data.substring(4);
+            String[] parts = parseInput(data, 3, "wrong parse");
+            String nodeSource = parts[1];
+            String nodeTarget = parts[2];
             adjList.get(nodeSource).add(nodeTarget);
             directedGraph.addEdge(nodeSource, nodeTarget);
         }
@@ -143,7 +174,7 @@ public class Main {
             for (int i = 0; i < neighbors.size(); i++) {
                 String neighbor = neighbors.get(i);
                 System.out.print("(" + node + ", " + neighbor + ")");
-                    System.out.print(", ");
+                System.out.print(", ");
             }
         });
 
@@ -173,7 +204,6 @@ public class Main {
             }
         }
         else{
-            // perform multithread dfs with 2 worker threads for each branching path
             // Multithreaded DFS
             List<String> path = new ArrayList<>();
             if (parallelDfsFindPath(nodeSource, nodeTarget, path)) {
@@ -184,80 +214,82 @@ public class Main {
 
         }
     }
-
     private static boolean parallelDfsFindPath(String nodeSource, String nodeTarget, List<String> path) {
-        ExecutorService executor = Executors.newFixedThreadPool(4); // Create thread pool
-        AtomicBoolean foundPath = new AtomicBoolean(false); // Flag to stop threads when a path is found
-        ConcurrentHashMap<String, Boolean> visited = new ConcurrentHashMap<>(); // Thread-safe visited set
-        List<String> concurrentPath = Collections.synchronizedList(new ArrayList<>()); // Thread-safe path
+        ForkJoinPool pool = new ForkJoinPool(6);
+        AtomicBoolean pathFound = new AtomicBoolean(false);
+        CopyOnWriteArrayList<String> concurrentPath = new CopyOnWriteArrayList<>();
 
-        // Start searching from the source node
-        executor.submit(() -> dfsFindPathThread(nodeSource, nodeTarget, visited, concurrentPath, foundPath));
-
-        // Wait for threads to complete or terminate early if a path is found
-        executor.shutdown();
         try {
-            executor.awaitTermination(10, TimeUnit.SECONDS); // Wait for completion (adjust timeout if needed)
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            e.printStackTrace();
+            pool.invoke(new ParallelDFS(nodeSource, nodeTarget, new ArrayList<>(), new HashSet<>(), pathFound, concurrentPath));
+        } finally {
+            pool.shutdown();
         }
 
-        // Copy the result (if found) back to the original path list
-        if (foundPath.get()) {
-            synchronized (concurrentPath) {
-                path.addAll(concurrentPath);
-            }
+        if (pathFound.get()) {
+            path.addAll(concurrentPath);
             return true;
         }
-
-        return false; // No path found
-    }
-
-    private static boolean dfsFindPathThread(
-            String currentNode,
-            String nodeTarget,
-            ConcurrentHashMap<String, Boolean> visited,
-            List<String> concurrentPath,
-            AtomicBoolean foundPath) {
-
-        // If a path has already been found by another thread, stop further processing
-        if (foundPath.get()) {
-            return false;
-        }
-
-        // Mark this node as visited (thread-safe)
-        visited.put(currentNode, true);
-
-        // Add node to the synchronized path
-        synchronized (concurrentPath) {
-            concurrentPath.add(currentNode);
-        }
-
-        // Base case: we've reached the target node
-        if (currentNode.equals(nodeTarget)) {
-            foundPath.set(true); // Signal that a path has been found
-            return true;
-        }
-
-        // Explore neighbors for the current node
-        for (String neighbor : adjList.getOrDefault(currentNode, new ArrayList<>())) {
-            // Avoid revisiting nodes (check the thread-safe visited map)
-            if (!visited.containsKey(neighbor) && !foundPath.get()) {
-                boolean pathFound = dfsFindPathThread(neighbor, nodeTarget, visited, concurrentPath, foundPath);
-                if (pathFound) {
-                    return true; // Exit early if a valid path is found
-                }
-            }
-        }
-
-        // Backtrack: remove the current node from the path if this branch fails
-        synchronized (concurrentPath) {
-            concurrentPath.remove(currentNode);
-        }
-
         return false;
     }
+
+    private static class ParallelDFS extends RecursiveTask<Boolean> {
+        private final String currentNode;
+        private final String targetNode;
+        private final List<String> currentPath;
+        private final Set<String> localVisited;
+        private final AtomicBoolean pathFound;
+        private final CopyOnWriteArrayList<String> concurrentPath;
+
+        public ParallelDFS(String currentNode, String targetNode, List<String> currentPath,
+                           Set<String> localVisited, AtomicBoolean pathFound, CopyOnWriteArrayList<String> concurrentPath) {
+            this.currentNode = currentNode;
+            this.targetNode = targetNode;
+            this.currentPath = new ArrayList<>(currentPath);
+            this.localVisited = new HashSet<>(localVisited);
+            this.pathFound = pathFound;
+            this.concurrentPath = concurrentPath;
+        }
+
+        @Override
+        protected Boolean compute() {
+            if (pathFound.get()) return false;
+
+            System.out.println("Thread " + Thread.currentThread().getName() + " is processing node: " + currentNode);
+
+            localVisited.add(currentNode);
+            currentPath.add(currentNode);
+
+            if (currentNode.equals(targetNode)) {
+                pathFound.set(true);
+                concurrentPath.clear();
+                concurrentPath.addAll(currentPath);
+                return true;
+            }
+
+
+
+            List<ParallelDFS> subTasks = new ArrayList<>();
+            for (String neighbor : adjList.getOrDefault(currentNode, new ArrayList<>())) {
+                if (!localVisited.contains(neighbor) && !pathFound.get()) {
+                    ParallelDFS subTask = new ParallelDFS(neighbor, targetNode, currentPath, localVisited, pathFound, concurrentPath);
+                    subTask.fork();
+                    subTasks.add(subTask);
+                    System.out.println("Thread " + Thread.currentThread().getName() + " is spawning a task for neighbor: " + neighbor);
+                }
+            }
+
+            for (ParallelDFS task : subTasks) {
+                if (task.join()) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+
+
 
     private static boolean dfsFindPath(String current, String target, Set<String> visited, List<String> path) {
         path.add(current);  // Add the current node to the path
