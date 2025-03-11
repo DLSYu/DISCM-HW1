@@ -23,10 +23,22 @@ import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 
 public class Main {
-    private static Map<String, Map<String, Integer>> adjList =  new HashMap<>();
+    private static Map<String, List<Edge>> adjList = new HashMap<>();
+
+    static class Edge {
+        String target;
+        int weight;
+
+        Edge(String target, int weight) {
+            this.target = target;
+            this.weight = weight;
+        }
+    }
+
     private static DirectedGraph<String, DefaultEdge> directedGraph
             = new DefaultDirectedGraph<>(DefaultEdge.class);
 
@@ -97,7 +109,7 @@ public class Main {
                 long endTime = System.currentTimeMillis();
                 System.out.println("Search took " + durationTimer(startTime, endTime) + " ms.\n");
             }
-            else if (input.startsWith("prime-path ")) {
+            else if (input.startsWith("prime-path")) {
                 String[] tokens = parseInput(input, 3, "Invalid prime-path query.");
                 String source = tokens[1];
                 String target = tokens[2];
@@ -115,7 +127,7 @@ public class Main {
                 long end = System.currentTimeMillis();
                 System.out.println("Search took " + (end - start) + " ms.");
             }
-            else if (input.startsWith("shortest-prime-path ")) {
+            else if (input.startsWith("shortest-prime-path")) {
                 String[] tokens = parseInput(input, 3, "Invalid shortest-prime-path query.");
                 String source = tokens[1];
                 String target = tokens[2];
@@ -195,7 +207,7 @@ public class Main {
         if (data.startsWith("*")) {
             String[] parts = parseInput(data, 2, "wrong parse");
             String node = parts[1];
-            adjList.putIfAbsent(node, new HashMap<>());
+            adjList.putIfAbsent(node, new ArrayList<>());
             directedGraph.addVertex(node);
         }
         else if (data.startsWith("-")) {
@@ -203,7 +215,7 @@ public class Main {
             String nodeSource = parts[1];
             String nodeTarget = parts[2];
             int weight = Integer.parseInt(parts[3]);
-            adjList.get(nodeSource).put(nodeTarget, weight);
+            adjList.computeIfAbsent(nodeSource, k -> new ArrayList<>()).add(new Edge(nodeTarget, weight));
             directedGraph.addEdge(nodeSource, nodeTarget);
         }
     }
@@ -211,9 +223,9 @@ public class Main {
     private static void getEdges(){
 
         System.out.print("Edges: ");
-        adjList.forEach((node, neighbors) -> {
-            neighbors.forEach((neighbor, weight) -> {
-                System.out.print("(" + node + ", " + neighbor + ", Weight: " + weight + ")");
+        adjList.forEach((node, edges) -> {
+            edges.forEach(edge -> {
+                System.out.print("(" + node + ", " + edge.target + ", Weight: " + edge.weight + ")");
                 System.out.print(", ");
             });
 
@@ -310,8 +322,8 @@ public class Main {
 
 
             List<ParallelDFS> subTasks = new ArrayList<>();
-            for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(currentNode, new HashMap<>()).entrySet()) {
-                String neighborNode = neighbor.getKey(); // Extract the neighbor node
+            for (Edge edge : adjList.getOrDefault(currentNode, new ArrayList<>())) {
+                String neighborNode = edge.target; // Extract the neighbor node
                 if (!localVisited.contains(neighborNode) && !pathFound.get()) {
                     ParallelDFS subTask = new ParallelDFS(neighborNode, targetNode, currentPath,
                             localVisited, pathFound, concurrentPath);
@@ -344,8 +356,8 @@ public class Main {
         }
 
         // Walk through all neighbors of the current node
-        for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(current, new HashMap<>()).entrySet()) {
-            String neighborNode = neighbor.getKey(); // Extract the neighbor node
+        for (Edge edge : adjList.getOrDefault(current, new ArrayList<>())) {
+            String neighborNode = edge.target; // Extract the neighbor node
             if (!visited.contains(neighborNode)) {
                 if (dfsFindPath(neighborNode, target, visited, path)) {
                     return true; // Path found
@@ -424,21 +436,23 @@ public class Main {
     }
 
 
-    private static boolean checkValidEdge(String nodeSource, String nodeTarget){
-        List<String> allNeighbors = new ArrayList<>(adjList.getOrDefault(nodeSource, new HashMap<>()).keySet());
-        int mid = allNeighbors.size()/2;
-        List<String> firstHalf = allNeighbors.subList(0, mid);
-        List<String> secondHalf = allNeighbors.subList(mid, allNeighbors.size());
-        if(!parallelComp){
-            if(allNeighbors.contains(nodeTarget))
-                return true;
-            return false;
-        }
-        else{
+    private static boolean checkValidEdge(String nodeSource, String nodeTarget) {
+        List<Edge> edges = adjList.getOrDefault(nodeSource, new ArrayList<>());
+
+        if (!parallelComp) {
+            // Linear search through edges
+            return edges.stream().anyMatch(edge -> edge.target.equals(nodeTarget));
+        } else {
+            // Split edges into two halves for parallel search
+            int mid = edges.size() / 2;
+            List<Edge> firstHalf = edges.subList(0, mid);
+            List<Edge> secondHalf = edges.subList(mid, edges.size());
+
             AtomicBoolean edgeFound = new AtomicBoolean(false);
 
-            Thread firstThread = new Thread(()-> checkValidEdgeThread(nodeTarget, edgeFound, firstHalf));
-            Thread secondThread = new Thread(()-> checkValidEdgeThread(nodeTarget, edgeFound, secondHalf));
+            // Create threads to search edge lists
+            Thread firstThread = new Thread(() -> checkValidEdgeThread(nodeTarget, edgeFound, firstHalf));
+            Thread secondThread = new Thread(() -> checkValidEdgeThread(nodeTarget, edgeFound, secondHalf));
 
             firstThread.start();
             secondThread.start();
@@ -455,12 +469,12 @@ public class Main {
         }
     }
 
-    private static void checkValidEdgeThread(String nodeTarget, AtomicBoolean edgeFound, List<String> subNeighbors){
-        for(String neighbor: subNeighbors){
-            if(edgeFound.get())
-                return;
-            if(neighbor.equals(nodeTarget))
+    private static void checkValidEdgeThread(String nodeTarget, AtomicBoolean edgeFound, List<Edge> edgesToCheck) {
+        for (Edge edge : edgesToCheck) {
+            if (edgeFound.get()) return;
+            if (edge.target.equals(nodeTarget)) {
                 edgeFound.set(true);
+            }
         }
     }
 
@@ -501,42 +515,38 @@ public class Main {
         List<String> path = new ArrayList<>();
         Set<String> visited = new HashSet<>();
         AtomicBoolean found = new AtomicBoolean(false);
-        int[] weight = {0};
-        boolean result = dfsFindPrimePath(nodeSource, nodeTarget, visited, path, 0, found);
-        if (result) {
-            return new PathResult(path, weight[0]);
-        } else {
-            return null;
-        }
+        int weight = dfsFindPrimePath(nodeSource, nodeTarget, visited, path, 0, found);
+        return found.get() ? new PathResult(path, weight) : null;
     }
 
-    private static boolean dfsFindPrimePath(String current, String target, Set<String> visited, List<String> path, int currentWeight, AtomicBoolean found) {
+    private static int dfsFindPrimePath(String current, String target, Set<String> visited, List<String> path, int currentWeight, AtomicBoolean found) {
         path.add(current);
         visited.add(current);
 
         if (current.equals(target)) {
             if (PrimeUtils.isPrime(currentWeight)) {
                 found.set(true);
-                return true;
+                return currentWeight; // Return the valid weight
             }
             path.remove(path.size() - 1);
             visited.remove(current);
-            return false;
+            return -1; // Indicate no prime path
         }
 
-        for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(current, new HashMap<>()).entrySet()) {
-            String neighborNode = neighbor.getKey();
-            int edgeWeight = neighbor.getValue();
+        for (Edge neighbor : adjList.getOrDefault(current, new ArrayList<>())) {
+            String neighborNode = neighbor.target;
+            int edgeWeight = neighbor.weight;
             if (!visited.contains(neighborNode) && !found.get()) {
-                if (dfsFindPrimePath(neighborNode, target, visited, path, currentWeight + edgeWeight, found)) {
-                    return true;
+                int resultWeight = dfsFindPrimePath(neighborNode, target, visited, path, currentWeight + edgeWeight, found);
+                if (resultWeight != -1) {
+                    return resultWeight; // Propagate the valid weight up
                 }
             }
         }
 
         path.remove(path.size() - 1);
         visited.remove(current);
-        return false;
+        return -1;
     }
 
     // Prime-Path Parallel DFS
@@ -605,9 +615,9 @@ public class Main {
             }
 
             List<ParallelPrimeDFS> subTasks = new ArrayList<>();
-            for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(currentNode, new HashMap<>()).entrySet()) {
-                String neighborNode = neighbor.getKey();
-                int edgeWeight = neighbor.getValue();
+            for (Edge edge : adjList.getOrDefault(currentNode, new ArrayList<>())) {
+                String neighborNode = edge.target;
+                int edgeWeight = edge.weight;
                 if (!localVisited.contains(neighborNode) && !pathFound.get()) {
                     ParallelPrimeDFS subTask = new ParallelPrimeDFS(
                             neighborNode, targetNode, currentPath,
@@ -635,38 +645,36 @@ public class Main {
         PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingInt(ps -> ps.weight));
         queue.add(new PathState(nodeSource, 0, new ArrayList<>(Collections.singletonList(nodeSource))));
 
-        Map<String, Integer> visited = new HashMap<>();
-        visited.put(nodeSource, 0);
+        int shortestPrimeWeight = Integer.MAX_VALUE;
+        PathResult result = null;
 
         while (!queue.isEmpty()) {
             PathState current = queue.poll();
-            String currentNode = current.node;
-            int currentWeight = current.weight;
-            List<String> currentPath = current.path;
 
-            if (currentNode.equals(nodeTarget)) {
-                if (PrimeUtils.isPrime(currentWeight)) {
-                    return new PathResult(currentPath, currentWeight);
+            // Skip paths heavier than the shortest prime found
+            if (current.weight >= shortestPrimeWeight) {
+                continue;
+            }
+
+            if (current.node.equals(nodeTarget)) {
+                if (PrimeUtils.isPrime(current.weight)) {
+                    if (current.weight < shortestPrimeWeight) {
+                        shortestPrimeWeight = current.weight;
+                        result = new PathResult(current.path, current.weight);
+                    }
                 }
                 continue;
             }
 
-            if (currentWeight > visited.get(currentNode)) continue;
-
-            for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(currentNode, new HashMap<>()).entrySet()) {
-                String neighborNode = neighbor.getKey();
-                int edgeWeight = neighbor.getValue();
-                int newWeight = currentWeight + edgeWeight;
-
-                if (!visited.containsKey(neighborNode) || newWeight < visited.get(neighborNode)) {
-                    visited.put(neighborNode, newWeight);
-                    List<String> newPath = new ArrayList<>(currentPath);
-                    newPath.add(neighborNode);
-                    queue.add(new PathState(neighborNode, newWeight, newPath));
-                }
+            // Explore neighbors
+            for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
+                int newWeight = current.weight + neighbor.weight;
+                List<String> newPath = new ArrayList<>(current.path);
+                newPath.add(neighbor.target);
+                queue.add(new PathState(neighbor.target, newWeight, newPath));
             }
         }
-        return null;
+        return result;
     }
 
     static class PathState implements Comparable<PathState>{
@@ -691,72 +699,63 @@ public class Main {
         ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
         PriorityBlockingQueue<PathState> queue = new PriorityBlockingQueue<>();
         AtomicInteger shortestPrimeWeight = new AtomicInteger(Integer.MAX_VALUE);
-        AtomicBoolean found = new AtomicBoolean(false);
+        AtomicReference<PathResult> bestResult = new AtomicReference<>();
 
         // Initialize with the source node
         queue.add(new PathState(source, 0, new ArrayList<>(Collections.singletonList(source))));
-
-        // Track visited nodes with their minimal weights
-        ConcurrentHashMap<String, Integer> visited = new ConcurrentHashMap<>();
 
         try {
             List<Future<?>> futures = new ArrayList<>();
             for (int i = 0; i < Runtime.getRuntime().availableProcessors(); i++) {
                 futures.add(executor.submit(() -> {
-                    while (!found.get() && !queue.isEmpty()) {
+                    while (!queue.isEmpty()) {
                         PathState current = queue.poll();
                         if (current == null) continue;
 
-                        // Early termination if a shorter prime path is already found
+                        // Skip paths heavier than the current shortest prime
                         if (current.weight >= shortestPrimeWeight.get()) {
                             continue;
                         }
 
-                        // Check if current path reaches the target and has prime weight
+                        // Check if this path reaches the target and is prime
                         if (current.node.equals(target)) {
                             if (PrimeUtils.isPrime(current.weight)) {
-                                // Atomically update the shortest prime weight
-                                if (current.weight < shortestPrimeWeight.getAndSet(current.weight)) {
-                                    found.set(true);
-                                    return new PathResult(current.path, current.weight);
-                                }
+                                // Update if this is the shortest prime found so far
+                                shortestPrimeWeight.getAndUpdate(curr -> {
+                                    if (current.weight < curr) {
+                                        bestResult.set(new PathResult(current.path, current.weight));
+                                        return current.weight;
+                                    }
+                                    return curr;
+                                });
                             }
                         }
 
                         // Explore neighbors
-                        for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(current.node, new HashMap<>()).entrySet()) {
-                            String neighborNode = neighbor.getKey();
-                            int newWeight = current.weight + neighbor.getValue();
+                        for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
+                            int newWeight = current.weight + neighbor.weight;
                             List<String> newPath = new ArrayList<>(current.path);
-                            newPath.add(neighborNode);
+                            newPath.add(neighbor.target);
 
-                            // Update visited only if this path is shorter
-                            visited.compute(neighborNode, (k, v) -> {
-                                if (v == null || newWeight < v) {
-                                    queue.add(new PathState(neighborNode, newWeight, newPath));
-                                    return newWeight;
-                                }
-                                return v;
-                            });
+                            // Add to queue if potentially shorter
+                            if (newWeight < shortestPrimeWeight.get()) {
+                                queue.add(new PathState(neighbor.target, newWeight, newPath));
+                            }
                         }
                     }
-                    return null;
                 }));
             }
 
-            // Wait for tasks to complete and check results
+            // Wait for all threads to finish
             for (Future<?> future : futures) {
-                PathResult result = (PathResult) future.get();
-                if (result != null) {
-                    executor.shutdownNow(); // Terminate other threads
-                    return result;
-                }
+                future.get();
             }
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
         } finally {
             executor.shutdown();
         }
-        return null;
+
+        return bestResult.get();
     }
 }
