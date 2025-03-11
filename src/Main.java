@@ -22,7 +22,7 @@ import java.util.*;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 public class Main {
@@ -96,6 +96,45 @@ public class Main {
                 }
                 long endTime = System.currentTimeMillis();
                 System.out.println("Search took " + durationTimer(startTime, endTime) + " ms.\n");
+            }
+            else if (input.startsWith("prime-path ")) {
+                String[] tokens = parseInput(input, 3, "Invalid prime-path query.");
+                String source = tokens[1];
+                String target = tokens[2];
+                long start = System.currentTimeMillis();
+                if (checkValidNode(source) && checkValidNode(target)) {
+                    PathResult result = parallelComp ? getPrimePathParallel(source, target) : getPrimePath(source, target);
+                    if (result != null) {
+                        System.out.println("prime path: " + String.join(" -> ", result.getPath()) + " with weight/length=" + result.getWeight());
+                    } else {
+                        System.out.println("No prime path from " + source + " to " + target);
+                    }
+                } else {
+                    System.out.println("Invalid nodes.");
+                }
+                long end = System.currentTimeMillis();
+                System.out.println("Search took " + (end - start) + " ms.");
+            }
+            else if (input.startsWith("shortest-prime-path ")) {
+                String[] tokens = parseInput(input, 3, "Invalid shortest-prime-path query.");
+                String source = tokens[1];
+                String target = tokens[2];
+                long start = System.currentTimeMillis();
+                if (checkValidNode(source) && checkValidNode(target)) {
+                    PathResult result = parallelComp ?
+                            findShortestPrimePathParallel(source, target) :
+                            findShortestPrimePath(source, target);
+                    if (result != null) {
+                        System.out.println("shortest prime path: " + String.join(" -> ", result.getPath()) +
+                                " with weight/length=" + result.getWeight());
+                    } else {
+                        System.out.println("No prime path from " + source + " to " + target);
+                    }
+                } else {
+                    System.out.println("Invalid nodes.");
+                }
+                long end = System.currentTimeMillis();
+                System.out.println("Search took " + (end - start) + " ms.");
             }
             else if(input.equals("exit")){
                 System.out.println("Goodbye!\n");
@@ -423,5 +462,301 @@ public class Main {
             if(neighbor.equals(nodeTarget))
                 edgeFound.set(true);
         }
+    }
+
+    // Check if a number is prime
+    public class PrimeUtils {
+        public static boolean isPrime(int n) {
+            if (n <= 1) return false;
+            if (n == 2) return true;
+            if (n % 2 == 0) return false;
+            for (int i = 3; i <= Math.sqrt(n); i += 2) {
+                if (n % i == 0) return false;
+            }
+            return true;
+        }
+    }
+
+    // Class to hold the path and its total weight
+    public static class PathResult {
+        private List<String> path;
+        private int weight;
+
+        public PathResult(List<String> path, int weight) {
+            this.path = path;
+            this.weight = weight;
+        }
+
+        public List<String> getPath() {
+            return path;
+        }
+
+        public int getWeight() {
+            return weight;
+        }
+    }
+
+    // Prime-Path Sequential DFS
+    private static PathResult getPrimePath(String nodeSource, String nodeTarget) {
+        List<String> path = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        AtomicBoolean found = new AtomicBoolean(false);
+        int[] weight = {0};
+        boolean result = dfsFindPrimePath(nodeSource, nodeTarget, visited, path, 0, found);
+        if (result) {
+            return new PathResult(path, weight[0]);
+        } else {
+            return null;
+        }
+    }
+
+    private static boolean dfsFindPrimePath(String current, String target, Set<String> visited, List<String> path, int currentWeight, AtomicBoolean found) {
+        path.add(current);
+        visited.add(current);
+
+        if (current.equals(target)) {
+            if (PrimeUtils.isPrime(currentWeight)) {
+                found.set(true);
+                return true;
+            }
+            path.remove(path.size() - 1);
+            visited.remove(current);
+            return false;
+        }
+
+        for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(current, new HashMap<>()).entrySet()) {
+            String neighborNode = neighbor.getKey();
+            int edgeWeight = neighbor.getValue();
+            if (!visited.contains(neighborNode) && !found.get()) {
+                if (dfsFindPrimePath(neighborNode, target, visited, path, currentWeight + edgeWeight, found)) {
+                    return true;
+                }
+            }
+        }
+
+        path.remove(path.size() - 1);
+        visited.remove(current);
+        return false;
+    }
+
+    // Prime-Path Parallel DFS
+    private static PathResult getPrimePathParallel(String nodeSource, String nodeTarget) {
+        ForkJoinPool pool = new ForkJoinPool(6);
+        AtomicBoolean pathFound = new AtomicBoolean(false);
+        CopyOnWriteArrayList<String> concurrentPath = new CopyOnWriteArrayList<>();
+        AtomicInteger primeWeight = new AtomicInteger(-1);
+
+        try {
+            pool.invoke(new ParallelPrimeDFS(nodeSource, nodeTarget, new ArrayList<>(), new HashSet<>(), pathFound, concurrentPath, 0, primeWeight));
+        } finally {
+            pool.shutdown();
+        }
+
+        if (pathFound.get()) {
+            return new PathResult(new ArrayList<>(concurrentPath), primeWeight.get());
+        } else {
+            return null;
+        }
+    }
+
+    static class ParallelPrimeDFS extends RecursiveTask<Boolean> {
+        private final String currentNode;
+        private final String targetNode;
+        private final List<String> currentPath;
+        private final Set<String> localVisited;
+        private final AtomicBoolean pathFound;
+        private final CopyOnWriteArrayList<String> concurrentPath;
+        private final int currentWeight;
+        private final AtomicInteger primeWeight;
+
+        public ParallelPrimeDFS(String currentNode, String targetNode, List<String> currentPath,
+                                Set<String> localVisited, AtomicBoolean pathFound,
+                                CopyOnWriteArrayList<String> concurrentPath, int currentWeight,
+                                AtomicInteger primeWeight) {
+            this.currentNode = currentNode;
+            this.targetNode = targetNode;
+            this.currentPath = new ArrayList<>(currentPath);
+            this.localVisited = new HashSet<>(localVisited);
+            this.pathFound = pathFound;
+            this.concurrentPath = concurrentPath;
+            this.currentWeight = currentWeight;
+            this.primeWeight = primeWeight;
+        }
+
+        @Override
+        protected Boolean compute() {
+            if (pathFound.get()) return false;
+
+            localVisited.add(currentNode);
+            currentPath.add(currentNode);
+
+            if (currentNode.equals(targetNode)) {
+                if (PrimeUtils.isPrime(currentWeight)) {
+                    if (pathFound.compareAndSet(false, true)) {
+                        concurrentPath.clear();
+                        concurrentPath.addAll(currentPath);
+                        primeWeight.set(currentWeight);
+                        return true;
+                    }
+                }
+                currentPath.remove(currentPath.size() - 1);
+                localVisited.remove(currentNode);
+                return false;
+            }
+
+            List<ParallelPrimeDFS> subTasks = new ArrayList<>();
+            for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(currentNode, new HashMap<>()).entrySet()) {
+                String neighborNode = neighbor.getKey();
+                int edgeWeight = neighbor.getValue();
+                if (!localVisited.contains(neighborNode) && !pathFound.get()) {
+                    ParallelPrimeDFS subTask = new ParallelPrimeDFS(
+                            neighborNode, targetNode, currentPath,
+                            localVisited, pathFound, concurrentPath,
+                            currentWeight + edgeWeight, primeWeight
+                    );
+                    subTask.fork();
+                    subTasks.add(subTask);
+                }
+            }
+
+            boolean found = false;
+            for (ParallelPrimeDFS task : subTasks) {
+                found = task.join() || found;
+            }
+
+            currentPath.remove(currentPath.size() - 1);
+            localVisited.remove(currentNode);
+            return found;
+        }
+    }
+
+    // Shortest Prime Path (Sequential) - Dijkstra's algorithm
+    private static PathResult findShortestPrimePath(String nodeSource, String nodeTarget) {
+        PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingInt(ps -> ps.weight));
+        queue.add(new PathState(nodeSource, 0, new ArrayList<>(Collections.singletonList(nodeSource))));
+
+        Map<String, Integer> visited = new HashMap<>();
+        visited.put(nodeSource, 0);
+
+        while (!queue.isEmpty()) {
+            PathState current = queue.poll();
+            String currentNode = current.node;
+            int currentWeight = current.weight;
+            List<String> currentPath = current.path;
+
+            if (currentNode.equals(nodeTarget)) {
+                if (PrimeUtils.isPrime(currentWeight)) {
+                    return new PathResult(currentPath, currentWeight);
+                }
+                continue;
+            }
+
+            if (currentWeight > visited.get(currentNode)) continue;
+
+            for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(currentNode, new HashMap<>()).entrySet()) {
+                String neighborNode = neighbor.getKey();
+                int edgeWeight = neighbor.getValue();
+                int newWeight = currentWeight + edgeWeight;
+
+                if (!visited.containsKey(neighborNode) || newWeight < visited.get(neighborNode)) {
+                    visited.put(neighborNode, newWeight);
+                    List<String> newPath = new ArrayList<>(currentPath);
+                    newPath.add(neighborNode);
+                    queue.add(new PathState(neighborNode, newWeight, newPath));
+                }
+            }
+        }
+        return null;
+    }
+
+    static class PathState implements Comparable<PathState>{
+        String node;
+        int weight;
+        List<String> path;
+
+        public PathState(String node, int weight, List<String> path) {
+            this.node = node;
+            this.weight = weight;
+            this.path = path;
+        }
+
+        @Override
+        public int compareTo(PathState other) {
+            return Integer.compare(this.weight, other.weight);
+        }
+    }
+
+    // Shortest Prime Path (Parallel)
+    private static PathResult findShortestPrimePathParallel(String source, String target) {
+        ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        PriorityBlockingQueue<PathState> queue = new PriorityBlockingQueue<>();
+        AtomicInteger shortestPrimeWeight = new AtomicInteger(Integer.MAX_VALUE);
+        AtomicBoolean found = new AtomicBoolean(false);
+
+        // Initialize with the source node
+        queue.add(new PathState(source, 0, new ArrayList<>(Collections.singletonList(source))));
+
+        // Track visited nodes with their minimal weights
+        ConcurrentHashMap<String, Integer> visited = new ConcurrentHashMap<>();
+
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < Runtime.getRuntime().availableProcessors(); i++) {
+                futures.add(executor.submit(() -> {
+                    while (!found.get() && !queue.isEmpty()) {
+                        PathState current = queue.poll();
+                        if (current == null) continue;
+
+                        // Early termination if a shorter prime path is already found
+                        if (current.weight >= shortestPrimeWeight.get()) {
+                            continue;
+                        }
+
+                        // Check if current path reaches the target and has prime weight
+                        if (current.node.equals(target)) {
+                            if (PrimeUtils.isPrime(current.weight)) {
+                                // Atomically update the shortest prime weight
+                                if (current.weight < shortestPrimeWeight.getAndSet(current.weight)) {
+                                    found.set(true);
+                                    return new PathResult(current.path, current.weight);
+                                }
+                            }
+                        }
+
+                        // Explore neighbors
+                        for (Map.Entry<String, Integer> neighbor : adjList.getOrDefault(current.node, new HashMap<>()).entrySet()) {
+                            String neighborNode = neighbor.getKey();
+                            int newWeight = current.weight + neighbor.getValue();
+                            List<String> newPath = new ArrayList<>(current.path);
+                            newPath.add(neighborNode);
+
+                            // Update visited only if this path is shorter
+                            visited.compute(neighborNode, (k, v) -> {
+                                if (v == null || newWeight < v) {
+                                    queue.add(new PathState(neighborNode, newWeight, newPath));
+                                    return newWeight;
+                                }
+                                return v;
+                            });
+                        }
+                    }
+                    return null;
+                }));
+            }
+
+            // Wait for tasks to complete and check results
+            for (Future<?> future : futures) {
+                PathResult result = (PathResult) future.get();
+                if (result != null) {
+                    executor.shutdownNow(); // Terminate other threads
+                    return result;
+                }
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            executor.shutdown();
+        }
+        return null;
     }
 }
