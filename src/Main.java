@@ -128,7 +128,27 @@ public class Main {
                 System.out.println("Search took " + (end - start) + " ms.");
             }
             else if (input.startsWith("shortest-path")) {
+                String[] tokenedinput = parseInput(input, 3, "wrong parse");
+                String nodeSource = tokenedinput[1];
+                String nodeTarget = tokenedinput[2];
 
+                long startTime = System.currentTimeMillis();
+                if(checkValidNode(nodeSource) && checkValidNode(nodeTarget)){
+                    PathResult result = parallelComp ?
+                            findShortestPathParallel(nodeSource, nodeTarget) :
+                            findShortestPath(nodeSource, nodeTarget);
+                    if (result != null) {
+                        System.out.println("shortest prime path: " + String.join(" -> ", result.getPath()) +
+                                " with weight/length=" + result.getWeight());
+                    } else {
+                        System.out.println("No path from " + nodeSource + " to " + nodeTarget);
+                    }
+                }
+                else{
+                    System.out.println("Invalid node/s.\n");
+                }
+                long endTime = System.currentTimeMillis();
+                System.out.println("Search took " + durationTimer(startTime, endTime) + " ms.\n");
             }
             else if (input.startsWith("shortest-prime-path")) {
                 String[] tokens = parseInput(input, 3, "Invalid shortest-prime-path query.");
@@ -366,10 +386,6 @@ public class Main {
                 return found;
             }
     }
-
-
-
-
 
     private static int dfsFindPath(String current, String target, Set<String> visited, List<String> path, int currentWeight) {
         path.add(current);  // Add the current node to the path
@@ -765,6 +781,104 @@ public class Main {
 
                             // Add to queue if potentially shorter
                             if (newWeight < shortestPrimeWeight.get()) {
+                                queue.add(new PathState(neighbor.target, newWeight, newPath));
+                            }
+                        }
+                    }
+                }));
+            }
+
+            // Wait for all threads to finish
+            for (Future<?> future : futures) {
+                future.get();
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            executor.shutdown();
+        }
+
+        return bestResult.get();
+    }
+
+    // Shortest Path (Sequential) - Dijkstra's algorithm
+    private static PathResult findShortestPath(String nodeSource, String nodeTarget) {
+        PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingInt(ps -> ps.weight));
+        queue.add(new PathState(nodeSource, 0, new ArrayList<>(Collections.singletonList(nodeSource))));
+
+        int shortestWeight = Integer.MAX_VALUE;
+        PathResult result = null;
+
+        while (!queue.isEmpty()) {
+            PathState current = queue.poll();
+
+            // Skip paths heavier than the shortest found
+            if (current.weight >= shortestWeight) {
+                continue;
+            }
+
+            if (current.node.equals(nodeTarget)) {
+                if (current.weight < shortestWeight) {
+                    shortestWeight = current.weight;
+                    result = new PathResult(current.path, current.weight);
+                }
+                continue;
+            }
+
+            // Explore neighbors
+            for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
+                int newWeight = current.weight + neighbor.weight;
+                List<String> newPath = new ArrayList<>(current.path);
+                newPath.add(neighbor.target);
+                queue.add(new PathState(neighbor.target, newWeight, newPath));
+            }
+        }
+        return result;
+    }
+
+    // Shortest Path (Parallel)
+    private static PathResult findShortestPathParallel(String source, String target) {
+        ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        PriorityBlockingQueue<PathState> queue = new PriorityBlockingQueue<>();
+        AtomicInteger shortestWeight = new AtomicInteger(Integer.MAX_VALUE);
+        AtomicReference<PathResult> bestResult = new AtomicReference<>();
+
+        // Initialize with the source node
+        queue.add(new PathState(source, 0, new ArrayList<>(Collections.singletonList(source))));
+
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < Runtime.getRuntime().availableProcessors(); i++) {
+                futures.add(executor.submit(() -> {
+                    while (!queue.isEmpty()) {
+                        PathState current = queue.poll();
+                        if (current == null) continue;
+
+                        // Skip paths heavier than the current shortest
+                        if (current.weight >= shortestWeight.get()) {
+                            continue;
+                        }
+
+                        // Check if this path reaches the target
+                        if (current.node.equals(target)) {
+                            // Update if this is the shortest found so far
+                            shortestWeight.getAndUpdate(curr -> {
+                                if (current.weight < curr) {
+                                    bestResult.set(new PathResult(current.path, current.weight));
+                                    return current.weight;
+                                }
+                                return curr;
+                            });
+                        }
+
+                        // Explore neighbors
+                        for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
+                            int newWeight = current.weight + neighbor.weight;
+                            List<String> newPath = new ArrayList<>(current.path);
+                            newPath.add(neighbor.target);
+
+                            // Add to queue if potentially shorter
+                            if (newWeight < shortestWeight.get()) {
                                 queue.add(new PathState(neighbor.target, newWeight, newPath));
                             }
                         }
