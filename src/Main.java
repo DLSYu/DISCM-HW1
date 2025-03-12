@@ -127,6 +127,9 @@ public class Main {
                 long end = System.currentTimeMillis();
                 System.out.println("Search took " + (end - start) + " ms.");
             }
+            else if (input.startsWith("shortest-path")) {
+
+            }
             else if (input.startsWith("shortest-prime-path")) {
                 String[] tokens = parseInput(input, 3, "Invalid shortest-prime-path query.");
                 String source = tokens[1];
@@ -250,8 +253,10 @@ public class Main {
         if(!parallelComp) {
             List<String> path = new ArrayList<>();
             Set<String> visited = new HashSet<>();
-            if (dfsFindPath(nodeSource, nodeTarget, visited, path)) {
-                return String.join(" -> ", path); // Construct the path as a string
+            int totalWeight = dfsFindPath(nodeSource, nodeTarget, visited, path, 0);
+            // -1 is a sentinel value indicating no path found
+            if (totalWeight != -1) {
+                return String.join(" -> ", path) + " with weight/length = " + totalWeight; // Construct the path as a string
             } else {
                 return "No path found from " + nodeSource + " to " + nodeTarget;
             }
@@ -259,21 +264,23 @@ public class Main {
         else{
             // Multithreaded DFS
             List<String> path = new ArrayList<>();
-            if (parallelDfsFindPath(nodeSource, nodeTarget, path)) {
-                return String.join(" -> ", path);
+            AtomicInteger totalWeight = new AtomicInteger(0);
+            if (parallelDfsFindPath(nodeSource, nodeTarget, path, totalWeight)) {
+                return String.join(" -> ", path) + " with weight/length = " + totalWeight.get();
             } else {
                 return "No path found from " + nodeSource + " to " + nodeTarget;
             }
 
         }
     }
-    private static boolean parallelDfsFindPath(String nodeSource, String nodeTarget, List<String> path) {
+    private static boolean parallelDfsFindPath(String nodeSource, String nodeTarget, List<String> path, AtomicInteger totalWeight) {
         ForkJoinPool pool = new ForkJoinPool(6);
         AtomicBoolean pathFound = new AtomicBoolean(false);
-        CopyOnWriteArrayList<String> concurrentPath = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> concurrentPath = new CopyOnWriteArrayList<>(); // Concurrent list to store the path
+
 
         try {
-            pool.invoke(new ParallelDFS(nodeSource, nodeTarget, new ArrayList<>(), new HashSet<>(), pathFound, concurrentPath));
+            pool.invoke(new ParallelDFS(nodeSource, nodeTarget, new ArrayList<>(), new HashSet<>(), pathFound, concurrentPath, 0, totalWeight));
         } finally {
             pool.shutdown();
         }
@@ -292,15 +299,20 @@ public class Main {
         private final Set<String> localVisited;
         private final AtomicBoolean pathFound;
         private final CopyOnWriteArrayList<String> concurrentPath;
+        private final int currentWeight;
+        private final AtomicInteger totalWeight;
 
         public ParallelDFS(String currentNode, String targetNode, List<String> currentPath,
-                           Set<String> localVisited, AtomicBoolean pathFound, CopyOnWriteArrayList<String> concurrentPath) {
+                           Set<String> localVisited, AtomicBoolean pathFound, CopyOnWriteArrayList<String> concurrentPath,
+                           int currentWeight, AtomicInteger totalWeight) {
             this.currentNode = currentNode;
             this.targetNode = targetNode;
             this.currentPath = new ArrayList<>(currentPath);
             this.localVisited = new HashSet<>(localVisited);
             this.pathFound = pathFound;
             this.concurrentPath = concurrentPath;
+            this.currentWeight = currentWeight;
+            this.totalWeight = totalWeight;
         }
 
         @Override
@@ -313,54 +325,68 @@ public class Main {
             currentPath.add(currentNode);
 
             if (currentNode.equals(targetNode)) {
-                pathFound.set(true);
-                concurrentPath.clear();
-                concurrentPath.addAll(currentPath);
-                return true;
-            }
-
-
-
-            List<ParallelDFS> subTasks = new ArrayList<>();
-            for (Edge edge : adjList.getOrDefault(currentNode, new ArrayList<>())) {
-                String neighborNode = edge.target; // Extract the neighbor node
-                if (!localVisited.contains(neighborNode) && !pathFound.get()) {
-                    ParallelDFS subTask = new ParallelDFS(neighborNode, targetNode, currentPath,
-                            localVisited, pathFound, concurrentPath);
-                    subTask.fork(); // Fork a new task
-                    subTasks.add(subTask); // Add the subtask to be processed later
-                }
-            }
-
-
-
-            for (ParallelDFS task : subTasks) {
-                if (task.join()) {
+                if (pathFound.compareAndSet(false, true)) {
+                    concurrentPath.clear();
+                    concurrentPath.addAll(currentPath);
+                    totalWeight.set(currentWeight);
                     return true;
                 }
+                return false;
             }
 
-            return false;
-        }
+
+                // Walk through all neighbors of the current node and set each as a subtask
+                List<ParallelDFS> subTasks = new ArrayList<>();
+                for (Edge edge : adjList.getOrDefault(currentNode, new ArrayList<>())) {
+//                String neighborNode = edge.target; // Extract the neighbor node
+//                if (!localVisited.contains(neighborNode) && !pathFound.get()) {
+//                    ParallelDFS subTask = new ParallelDFS(neighborNode, targetNode, currentPath,
+//                            localVisited, pathFound, concurrentPath);
+//                    subTask.fork(); // Fork a new task
+//                    subTasks.add(subTask); // Add the subtask to be processed later
+//                }
+                    if (!localVisited.contains(edge.target) && !pathFound.get()) {
+                        subTasks.add(new ParallelDFS(edge.target, targetNode, currentPath, localVisited, pathFound, concurrentPath, currentWeight + edge.weight, totalWeight));
+                        subTasks.get(subTasks.size() - 1).fork();
+                    }
+
+                }
+
+
+                boolean found = false;
+                for (ParallelDFS task : subTasks) {
+                    found = task.join() || found;
+                }
+
+                if (!found) {
+                    currentPath.remove(currentPath.size() - 1);
+                    localVisited.remove(currentNode);
+                }
+
+                return found;
+            }
     }
 
 
 
 
-    private static boolean dfsFindPath(String current, String target, Set<String> visited, List<String> path) {
+
+    private static int dfsFindPath(String current, String target, Set<String> visited, List<String> path, int currentWeight) {
         path.add(current);  // Add the current node to the path
         visited.add(current);  // Mark the current node as visited
 
         if (current.equals(target)) {  // Base case: if current node is the target node
-            return true;
+            return currentWeight;
         }
 
         // Walk through all neighbors of the current node
         for (Edge edge : adjList.getOrDefault(current, new ArrayList<>())) {
             String neighborNode = edge.target; // Extract the neighbor node
+            int edgeWeight = edge.weight; // Extract the edge weight
             if (!visited.contains(neighborNode)) {
-                if (dfsFindPath(neighborNode, target, visited, path)) {
-                    return true; // Path found
+                int weight = dfsFindPath(neighborNode, target, visited, path, currentWeight + edgeWeight);
+                if (weight != -1) {// Valid path found
+                    return weight;
                 }
             }
         }
@@ -368,7 +394,7 @@ public class Main {
 
         // If no valid path found, backtrack
         path.remove(path.size() - 1);
-        return false;
+        return -1;
     }
 
     private static void visualizeGraph(){
