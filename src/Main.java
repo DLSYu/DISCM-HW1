@@ -297,10 +297,10 @@ public class Main {
         ForkJoinPool pool = new ForkJoinPool(6);
         AtomicBoolean pathFound = new AtomicBoolean(false);
         CopyOnWriteArrayList<String> concurrentPath = new CopyOnWriteArrayList<>(); // Concurrent list to store the path
-
+        ConcurrentHashMap<String, Boolean> globalVisited = new ConcurrentHashMap<>(); // Global thread-safe visited set
 
         try {
-            pool.invoke(new ParallelDFS(nodeSource, nodeTarget, new ArrayList<>(), new HashSet<>(), pathFound, concurrentPath, 0, totalWeight));
+            pool.invoke(new ParallelDFS(nodeSource, nodeTarget, new ArrayList<>(), globalVisited, pathFound, concurrentPath, 0, totalWeight));
         } finally {
             pool.shutdown();
         }
@@ -316,19 +316,19 @@ public class Main {
         private final String currentNode;
         private final String targetNode;
         private final List<String> currentPath;
-        private final Set<String> localVisited;
+        private final ConcurrentHashMap<String, Boolean> globalVisited; // Shared global visited set
         private final AtomicBoolean pathFound;
         private final CopyOnWriteArrayList<String> concurrentPath;
         private final int currentWeight;
         private final AtomicInteger totalWeight;
 
         public ParallelDFS(String currentNode, String targetNode, List<String> currentPath,
-                           Set<String> localVisited, AtomicBoolean pathFound, CopyOnWriteArrayList<String> concurrentPath,
-                           int currentWeight, AtomicInteger totalWeight) {
+                           ConcurrentHashMap<String, Boolean> globalVisited, AtomicBoolean pathFound,
+                           CopyOnWriteArrayList<String> concurrentPath, int currentWeight, AtomicInteger totalWeight) {
             this.currentNode = currentNode;
             this.targetNode = targetNode;
             this.currentPath = new ArrayList<>(currentPath);
-            this.localVisited = new HashSet<>(localVisited);
+            this.globalVisited = globalVisited;
             this.pathFound = pathFound;
             this.concurrentPath = concurrentPath;
             this.currentWeight = currentWeight;
@@ -341,7 +341,11 @@ public class Main {
 
             System.out.println("Thread " + Thread.currentThread().getName() + " is processing node: " + currentNode);
 
-            localVisited.add(currentNode);
+            // Attempt to add the current node to the global visited set atomically
+            if (globalVisited.putIfAbsent(currentNode, true) != null) {
+                return false; // Node is already visited
+            }
+
             currentPath.add(currentNode);
 
             if (currentNode.equals(targetNode)) {
@@ -354,38 +358,33 @@ public class Main {
                 return false;
             }
 
-
-                // Walk through all neighbors of the current node and set each as a subtask
-                List<ParallelDFS> subTasks = new ArrayList<>();
-                for (Edge edge : adjList.getOrDefault(currentNode, new ArrayList<>())) {
-//                String neighborNode = edge.target; // Extract the neighbor node
-//                if (!localVisited.contains(neighborNode) && !pathFound.get()) {
-//                    ParallelDFS subTask = new ParallelDFS(neighborNode, targetNode, currentPath,
-//                            localVisited, pathFound, concurrentPath);
-//                    subTask.fork(); // Fork a new task
-//                    subTasks.add(subTask); // Add the subtask to be processed later
-//                }
-                    if (!localVisited.contains(edge.target) && !pathFound.get()) {
-                        subTasks.add(new ParallelDFS(edge.target, targetNode, currentPath, localVisited, pathFound, concurrentPath, currentWeight + edge.weight, totalWeight));
-                        subTasks.get(subTasks.size() - 1).fork();
-                    }
-
+            // Walk through all neighbors of the current node and create child tasks
+            List<ParallelDFS> subTasks = new ArrayList<>();
+            for (Edge edge : adjList.getOrDefault(currentNode, new ArrayList<>())) {
+                if (!globalVisited.containsKey(edge.target) && !pathFound.get()) {
+                    subTasks.add(new ParallelDFS(
+                            edge.target, targetNode, currentPath,
+                            globalVisited, pathFound, concurrentPath,
+                            currentWeight + edge.weight, totalWeight
+                    ));
+                    subTasks.get(subTasks.size() - 1).fork(); // Fork the new task
                 }
-
-
-                boolean found = false;
-                for (ParallelDFS task : subTasks) {
-                    found = task.join() || found;
-                }
-
-                if (!found) {
-                    currentPath.remove(currentPath.size() - 1);
-                    localVisited.remove(currentNode);
-                }
-
-                return found;
             }
+
+            // Wait for all child tasks to complete and check if the path was found
+            boolean found = false;
+            for (ParallelDFS task : subTasks) {
+                found = task.join() || found;
+            }
+
+            if (!found) {
+                currentPath.remove(currentPath.size() - 1); // Backtrack
+            }
+
+            return found;
+        }
     }
+
 
     private static int dfsFindPath(String current, String target, Set<String> visited, List<String> path, int currentWeight) {
         path.add(current);  // Add the current node to the path
@@ -686,12 +685,18 @@ public class Main {
     private static PathResult findShortestPrimePath(String nodeSource, String nodeTarget) {
         PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingInt(ps -> ps.weight));
         queue.add(new PathState(nodeSource, 0, new ArrayList<>(Collections.singletonList(nodeSource))));
+        Set<String> visited = new HashSet<>();
 
         int shortestPrimeWeight = Integer.MAX_VALUE;
         PathResult result = null;
 
         while (!queue.isEmpty()) {
             PathState current = queue.poll();
+
+            if (visited.contains(current.node)) {
+                continue;
+            }
+            visited.add(current.node);
 
             // Skip paths heavier than the shortest prime found
             if (current.weight >= shortestPrimeWeight) {
@@ -742,6 +747,7 @@ public class Main {
         PriorityBlockingQueue<PathState> queue = new PriorityBlockingQueue<>();
         AtomicInteger shortestPrimeWeight = new AtomicInteger(Integer.MAX_VALUE);
         AtomicReference<PathResult> bestResult = new AtomicReference<>();
+        ConcurrentHashMap<String, Boolean> visited = new ConcurrentHashMap<>();
 
         // Initialize with the source node
         queue.add(new PathState(source, 0, new ArrayList<>(Collections.singletonList(source))));
@@ -753,6 +759,11 @@ public class Main {
                     while (!queue.isEmpty()) {
                         PathState current = queue.poll();
                         if (current == null) continue;
+
+                        //skips already processed nodes
+                        if (visited.putIfAbsent(current.node, true) != null) {
+                            continue;
+                        }
 
                         // Skip paths heavier than the current shortest prime
                         if (current.weight >= shortestPrimeWeight.get()) {
@@ -775,13 +786,15 @@ public class Main {
 
                         // Explore neighbors
                         for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
-                            int newWeight = current.weight + neighbor.weight;
-                            List<String> newPath = new ArrayList<>(current.path);
-                            newPath.add(neighbor.target);
+                            if (!visited.containsKey(neighbor.target)) {
+                                int newWeight = current.weight + neighbor.weight;
+                                List<String> newPath = new ArrayList<>(current.path);
+                                newPath.add(neighbor.target);
 
-                            // Add to queue if potentially shorter
-                            if (newWeight < shortestPrimeWeight.get()) {
-                                queue.add(new PathState(neighbor.target, newWeight, newPath));
+                                // Add to queue if potentially shorter
+                                if (newWeight < shortestPrimeWeight.get()) {
+                                    queue.add(new PathState(neighbor.target, newWeight, newPath));
+                                }
                             }
                         }
                     }
@@ -806,11 +819,17 @@ public class Main {
         PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingInt(ps -> ps.weight));
         queue.add(new PathState(nodeSource, 0, new ArrayList<>(Collections.singletonList(nodeSource))));
 
+        Set<String> visited = new HashSet<>();
         int shortestWeight = Integer.MAX_VALUE;
         PathResult result = null;
 
         while (!queue.isEmpty()) {
             PathState current = queue.poll();
+
+            if (visited.contains(current.node)) {
+                continue;
+            }
+            visited.add(current.node);
 
             // Skip paths heavier than the shortest found
             if (current.weight >= shortestWeight) {
@@ -843,6 +862,8 @@ public class Main {
         AtomicInteger shortestWeight = new AtomicInteger(Integer.MAX_VALUE);
         AtomicReference<PathResult> bestResult = new AtomicReference<>();
 
+        ConcurrentHashMap<String, Boolean> visited = new ConcurrentHashMap<>();
+
         // Initialize with the source node
         queue.add(new PathState(source, 0, new ArrayList<>(Collections.singletonList(source))));
 
@@ -853,6 +874,12 @@ public class Main {
                     while (!queue.isEmpty()) {
                         PathState current = queue.poll();
                         if (current == null) continue;
+
+                        //skips already processed nodes
+                        if (visited.putIfAbsent(current.node, true) != null) {
+                            continue;
+                        }
+
 
                         // Skip paths heavier than the current shortest
                         if (current.weight >= shortestWeight.get()) {
@@ -873,13 +900,15 @@ public class Main {
 
                         // Explore neighbors
                         for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
-                            int newWeight = current.weight + neighbor.weight;
-                            List<String> newPath = new ArrayList<>(current.path);
-                            newPath.add(neighbor.target);
+                            if (!visited.containsKey(neighbor.target)) {
+                                int newWeight = current.weight + neighbor.weight;
+                                List<String> newPath = new ArrayList<>(current.path);
+                                newPath.add(neighbor.target);
 
-                            // Add to queue if potentially shorter
-                            if (newWeight < shortestWeight.get()) {
-                                queue.add(new PathState(neighbor.target, newWeight, newPath));
+                                // Add to queue if potentially shorter
+                                if (newWeight < shortestWeight.get()) {
+                                    queue.add(new PathState(neighbor.target, newWeight, newPath));
+                                }
                             }
                         }
                     }
