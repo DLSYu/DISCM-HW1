@@ -18,11 +18,13 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 
@@ -31,9 +33,9 @@ public class Main {
 
     static class Edge {
         String target;
-        int weight;
+        BigInteger weight;
 
-        Edge(String target, int weight) {
+        Edge(String target, BigInteger weight) {
             this.target = target;
             this.weight = weight;
         }
@@ -43,7 +45,7 @@ public class Main {
             = new DefaultDirectedGraph<>(DefaultEdge.class);
 
     private static boolean parallelComp = false;
-    private static final String file = "src/graph.txt";
+    private static final String file = "src/graph-hammock-1";
 
     public static void main(String[] args) {
         parseFile();
@@ -237,7 +239,7 @@ public class Main {
             String[] parts = parseInput(data, 4, "wrong parse");
             String nodeSource = parts[1];
             String nodeTarget = parts[2];
-            int weight = Integer.parseInt(parts[3]);
+            BigInteger weight = new BigInteger(parts[3]);
             adjList.computeIfAbsent(nodeSource, k -> new ArrayList<>()).add(new Edge(nodeTarget, weight));
             directedGraph.addEdge(nodeSource, nodeTarget);
         }
@@ -273,7 +275,7 @@ public class Main {
         if(!parallelComp) {
             List<String> path = new ArrayList<>();
             Set<String> visited = new HashSet<>();
-            int totalWeight = dfsFindPath(nodeSource, nodeTarget, visited, path, 0);
+            long totalWeight = dfsFindPath(nodeSource, nodeTarget, visited, path, 0);
             // -1 is a sentinel value indicating no path found
             if (totalWeight != -1) {
                 return String.join(" -> ", path) + " with weight/length = " + totalWeight; // Construct the path as a string
@@ -284,7 +286,7 @@ public class Main {
         else{
             // Multithreaded DFS
             List<String> path = new ArrayList<>();
-            AtomicInteger totalWeight = new AtomicInteger(0);
+            AtomicLong totalWeight = new AtomicLong(0);
             if (parallelDfsFindPath(nodeSource, nodeTarget, path, totalWeight)) {
                 return String.join(" -> ", path) + " with weight/length = " + totalWeight.get();
             } else {
@@ -293,7 +295,7 @@ public class Main {
 
         }
     }
-    private static boolean parallelDfsFindPath(String nodeSource, String nodeTarget, List<String> path, AtomicInteger totalWeight) {
+    private static boolean parallelDfsFindPath(String nodeSource, String nodeTarget, List<String> path, AtomicLong totalWeight) {
         ForkJoinPool pool = new ForkJoinPool(6);
         AtomicBoolean pathFound = new AtomicBoolean(false);
         CopyOnWriteArrayList<String> concurrentPath = new CopyOnWriteArrayList<>(); // Concurrent list to store the path
@@ -319,12 +321,12 @@ public class Main {
         private final Set<String> localVisited;
         private final AtomicBoolean pathFound;
         private final CopyOnWriteArrayList<String> concurrentPath;
-        private final int currentWeight;
-        private final AtomicInteger totalWeight;
+        private final long currentWeight;
+        private final AtomicLong totalWeight;
 
         public ParallelDFS(String currentNode, String targetNode, List<String> currentPath,
                            Set<String> localVisited, AtomicBoolean pathFound, CopyOnWriteArrayList<String> concurrentPath,
-                           int currentWeight, AtomicInteger totalWeight) {
+                           long currentWeight, AtomicLong totalWeight) {
             this.currentNode = currentNode;
             this.targetNode = targetNode;
             this.currentPath = new ArrayList<>(currentPath);
@@ -387,7 +389,7 @@ public class Main {
             }
     }
 
-    private static int dfsFindPath(String current, String target, Set<String> visited, List<String> path, int currentWeight) {
+    private static long dfsFindPath(String current, String target, Set<String> visited, List<String> path, long currentWeight) {
         path.add(current);  // Add the current node to the path
         visited.add(current);  // Mark the current node as visited
 
@@ -398,9 +400,9 @@ public class Main {
         // Walk through all neighbors of the current node
         for (Edge edge : adjList.getOrDefault(current, new ArrayList<>())) {
             String neighborNode = edge.target; // Extract the neighbor node
-            int edgeWeight = edge.weight; // Extract the edge weight
+            long edgeWeight = edge.weight; // Extract the edge weight
             if (!visited.contains(neighborNode)) {
-                int weight = dfsFindPath(neighborNode, target, visited, path, currentWeight + edgeWeight);
+                long weight = dfsFindPath(neighborNode, target, visited, path, currentWeight + edgeWeight);
                 if (weight != -1) {// Valid path found
                     return weight;
                 }
@@ -522,7 +524,7 @@ public class Main {
 
     // Check if a number is prime
     public class PrimeUtils {
-        public static boolean isPrime(int n) {
+        public static boolean isPrime(long n) {
             if (n <= 1) return false;
             if (n == 2) return true;
             if (n % 2 == 0) return false;
@@ -536,9 +538,9 @@ public class Main {
     // Class to hold the path and its total weight
     public static class PathResult {
         private List<String> path;
-        private int weight;
+        private long weight;
 
-        public PathResult(List<String> path, int weight) {
+        public PathResult(List<String> path, long weight) {
             this.path = path;
             this.weight = weight;
         }
@@ -547,7 +549,7 @@ public class Main {
             return path;
         }
 
-        public int getWeight() {
+        public long getWeight() {
             return weight;
         }
     }
@@ -557,11 +559,11 @@ public class Main {
         List<String> path = new ArrayList<>();
         Set<String> visited = new HashSet<>();
         AtomicBoolean found = new AtomicBoolean(false);
-        int weight = dfsFindPrimePath(nodeSource, nodeTarget, visited, path, 0, found);
+        long weight = dfsFindPrimePath(nodeSource, nodeTarget, visited, path, 0, found);
         return found.get() ? new PathResult(path, weight) : null;
     }
 
-    private static int dfsFindPrimePath(String current, String target, Set<String> visited, List<String> path, int currentWeight, AtomicBoolean found) {
+    private static long dfsFindPrimePath(String current, String target, Set<String> visited, List<String> path, long currentWeight, AtomicBoolean found) {
         path.add(current);
         visited.add(current);
 
@@ -577,9 +579,9 @@ public class Main {
 
         for (Edge neighbor : adjList.getOrDefault(current, new ArrayList<>())) {
             String neighborNode = neighbor.target;
-            int edgeWeight = neighbor.weight;
+            long edgeWeight = neighbor.weight;
             if (!visited.contains(neighborNode) && !found.get()) {
-                int resultWeight = dfsFindPrimePath(neighborNode, target, visited, path, currentWeight + edgeWeight, found);
+                long resultWeight = dfsFindPrimePath(neighborNode, target, visited, path, currentWeight + edgeWeight, found);
                 if (resultWeight != -1) {
                     return resultWeight; // Propagate the valid weight up
                 }
@@ -596,7 +598,7 @@ public class Main {
         ForkJoinPool pool = new ForkJoinPool(6);
         AtomicBoolean pathFound = new AtomicBoolean(false);
         CopyOnWriteArrayList<String> concurrentPath = new CopyOnWriteArrayList<>();
-        AtomicInteger primeWeight = new AtomicInteger(-1);
+        AtomicLong primeWeight = new AtomicLong(-1);
 
         try {
             pool.invoke(new ParallelPrimeDFS(nodeSource, nodeTarget, new ArrayList<>(), new HashSet<>(), pathFound, concurrentPath, 0, primeWeight));
@@ -618,13 +620,13 @@ public class Main {
         private final Set<String> localVisited;
         private final AtomicBoolean pathFound;
         private final CopyOnWriteArrayList<String> concurrentPath;
-        private final int currentWeight;
-        private final AtomicInteger primeWeight;
+        private final long currentWeight;
+        private final AtomicLong primeWeight;
 
         public ParallelPrimeDFS(String currentNode, String targetNode, List<String> currentPath,
                                 Set<String> localVisited, AtomicBoolean pathFound,
-                                CopyOnWriteArrayList<String> concurrentPath, int currentWeight,
-                                AtomicInteger primeWeight) {
+                                CopyOnWriteArrayList<String> concurrentPath, long currentWeight,
+                                AtomicLong primeWeight) {
             this.currentNode = currentNode;
             this.targetNode = targetNode;
             this.currentPath = new ArrayList<>(currentPath);
@@ -659,7 +661,7 @@ public class Main {
             List<ParallelPrimeDFS> subTasks = new ArrayList<>();
             for (Edge edge : adjList.getOrDefault(currentNode, new ArrayList<>())) {
                 String neighborNode = edge.target;
-                int edgeWeight = edge.weight;
+                long edgeWeight = edge.weight;
                 if (!localVisited.contains(neighborNode) && !pathFound.get()) {
                     ParallelPrimeDFS subTask = new ParallelPrimeDFS(
                             neighborNode, targetNode, currentPath,
@@ -684,10 +686,10 @@ public class Main {
 
     // Shortest Prime Path (Sequential) - Dijkstra's algorithm
     private static PathResult findShortestPrimePath(String nodeSource, String nodeTarget) {
-        PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingInt(ps -> ps.weight));
+        PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingLong(ps -> ps.weight));
         queue.add(new PathState(nodeSource, 0, new ArrayList<>(Collections.singletonList(nodeSource))));
 
-        int shortestPrimeWeight = Integer.MAX_VALUE;
+        long shortestPrimeWeight = Integer.MAX_VALUE;
         PathResult result = null;
 
         while (!queue.isEmpty()) {
@@ -710,7 +712,7 @@ public class Main {
 
             // Explore neighbors
             for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
-                int newWeight = current.weight + neighbor.weight;
+                long newWeight = current.weight + neighbor.weight;
                 List<String> newPath = new ArrayList<>(current.path);
                 newPath.add(neighbor.target);
                 queue.add(new PathState(neighbor.target, newWeight, newPath));
@@ -721,10 +723,10 @@ public class Main {
 
     static class PathState implements Comparable<PathState>{
         String node;
-        int weight;
+        long weight;
         List<String> path;
 
-        public PathState(String node, int weight, List<String> path) {
+        public PathState(String node, long weight, List<String> path) {
             this.node = node;
             this.weight = weight;
             this.path = path;
@@ -732,7 +734,7 @@ public class Main {
 
         @Override
         public int compareTo(PathState other) {
-            return Integer.compare(this.weight, other.weight);
+            return Long.compare(this.weight, other.weight);
         }
     }
 
@@ -740,7 +742,7 @@ public class Main {
     private static PathResult findShortestPrimePathParallel(String source, String target) {
         ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
         PriorityBlockingQueue<PathState> queue = new PriorityBlockingQueue<>();
-        AtomicInteger shortestPrimeWeight = new AtomicInteger(Integer.MAX_VALUE);
+        AtomicLong shortestPrimeWeight = new AtomicLong(Integer.MAX_VALUE);
         AtomicReference<PathResult> bestResult = new AtomicReference<>();
 
         // Initialize with the source node
@@ -775,7 +777,7 @@ public class Main {
 
                         // Explore neighbors
                         for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
-                            int newWeight = current.weight + neighbor.weight;
+                            long newWeight = current.weight + neighbor.weight;
                             List<String> newPath = new ArrayList<>(current.path);
                             newPath.add(neighbor.target);
 
@@ -803,10 +805,10 @@ public class Main {
 
     // Shortest Path (Sequential) - Dijkstra's algorithm
     private static PathResult findShortestPath(String nodeSource, String nodeTarget) {
-        PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingInt(ps -> ps.weight));
+        PriorityQueue<PathState> queue = new PriorityQueue<>(Comparator.comparingLong(ps -> ps.weight));
         queue.add(new PathState(nodeSource, 0, new ArrayList<>(Collections.singletonList(nodeSource))));
 
-        int shortestWeight = Integer.MAX_VALUE;
+        long shortestWeight = Integer.MAX_VALUE;
         PathResult result = null;
 
         while (!queue.isEmpty()) {
@@ -827,7 +829,7 @@ public class Main {
 
             // Explore neighbors
             for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
-                int newWeight = current.weight + neighbor.weight;
+                long newWeight = current.weight + neighbor.weight;
                 List<String> newPath = new ArrayList<>(current.path);
                 newPath.add(neighbor.target);
                 queue.add(new PathState(neighbor.target, newWeight, newPath));
@@ -840,7 +842,7 @@ public class Main {
     private static PathResult findShortestPathParallel(String source, String target) {
         ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
         PriorityBlockingQueue<PathState> queue = new PriorityBlockingQueue<>();
-        AtomicInteger shortestWeight = new AtomicInteger(Integer.MAX_VALUE);
+        AtomicLong shortestWeight = new AtomicLong(Integer.MAX_VALUE);
         AtomicReference<PathResult> bestResult = new AtomicReference<>();
 
         // Initialize with the source node
@@ -873,7 +875,7 @@ public class Main {
 
                         // Explore neighbors
                         for (Edge neighbor : adjList.getOrDefault(current.node, new ArrayList<>())) {
-                            int newWeight = current.weight + neighbor.weight;
+                            long newWeight = current.weight + neighbor.weight;
                             List<String> newPath = new ArrayList<>(current.path);
                             newPath.add(neighbor.target);
 
