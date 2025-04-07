@@ -24,6 +24,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 
 public class Main {
@@ -39,11 +40,71 @@ public class Main {
         }
     }
 
+    // New class for agent
+    static class Agent {
+        String name;
+        String current;
+        String destination;
+        List<String> pathHistory = new ArrayList<>();
+
+        public Agent(String name, String startNode) {
+            this.name = name;
+            this.current = startNode;
+            this.destination = name.split("-")[0];
+            pathHistory.add(startNode);
+        }
+
+        public synchronized boolean tryMove() {
+            if (current.equals(destination)) {
+                System.out.println("Agent " + name + " already at destination " + destination);
+                return true;
+            }
+
+            List<Edge> possibleEdges = adjList.getOrDefault(current, Collections.emptyList())
+                    .stream()
+                    .filter(e -> e.weight == Integer.parseInt(destination))
+                    .collect(Collectors.toList());
+
+            if (possibleEdges.isEmpty()) {
+                System.out.println("Agent " + name + " stuck at " + current + " - no valid edges");
+                return false;
+            }
+
+            Collections.shuffle(possibleEdges);
+            for (Edge e : possibleEdges) {
+                if (!nodeOccupants.containsKey(e.target)) {
+                    // Move to new node
+                    nodeOccupants.remove(current);
+                    nodeOccupants.put(e.target, name);
+                    System.out.println("Agent " + name + " moves from " + current + " to " + e.target);
+                    current = e.target;
+                    pathHistory.add(current);
+
+                    if (current.equals(destination)) {
+                        System.out.println("Agent " + name + " REACHED DESTINATION " + destination);
+                        agents.remove(this);
+                        nodeOccupants.remove(current);
+                    }
+                    return true;
+                }
+            }
+
+            System.out.println("Agent " + name + " waits at " + current + " - all targets occupied");
+            return false;
+        }
+    }
+
     private static DirectedGraph<String, DefaultEdge> directedGraph
             = new DefaultDirectedGraph<>(DefaultEdge.class);
 
     private static boolean parallelComp = false;
-    private static final String file = "src/graph.txt";
+    private static final String file = "src/graph3.txt";
+
+    // New variables for agent simuulation
+    private static Map<String, String> nodeOccupants = new ConcurrentHashMap<>();
+    private static List<Agent> agents = new CopyOnWriteArrayList<>();
+    private static volatile boolean simulationRunning = false;
+
 
     public static void main(String[] args) {
         parseFile();
@@ -171,6 +232,13 @@ public class Main {
                 long end = System.currentTimeMillis();
                 System.out.println("Search took " + (end - start) + " ms.");
             }
+            else if (input.equals("simulate-agents")) {
+                if (agents.isEmpty()) {
+                    System.out.println("No agents to simulate!");
+                } else {
+                    new Thread(Main::simulateAgents).start();
+                }
+            }
             else if(input.equals("exit")){
                 System.out.println("Goodbye!\n");
             }
@@ -228,10 +296,16 @@ public class Main {
 
     private static void processLine(String data){
         if (data.startsWith("*")) {
-            String[] parts = parseInput(data, 2, "wrong parse");
+            String[] parts = data.trim().split("\\s+");
             String node = parts[1];
             adjList.putIfAbsent(node, new ArrayList<>());
             directedGraph.addVertex(node);
+
+            // Check if node has an agent
+            if (parts.length >= 3) {
+                String agentName = parts[2];
+                agents.add(new Agent(agentName, node));
+            }
         }
         else if (data.startsWith("-")) {
             String[] parts = parseInput(data, 4, "wrong parse");
@@ -926,5 +1000,68 @@ public class Main {
         }
 
         return bestResult.get();
+    }
+
+    // Simulation Method
+    private static void simulateAgents() {
+        System.out.println("\n=== Starting Agent Simulation ===");
+
+        // Initial logs
+        System.out.println("Nodes: " + String.join(", ", adjList.keySet()));
+        System.out.println("Edges:");
+        adjList.forEach((source, edges) ->
+                edges.forEach(e ->
+                        System.out.println("  " + source + " -> " + e.target + " (weight: " + e.weight + ")")
+                )
+        );
+        System.out.println("Agents:");
+        agents.forEach(a ->
+                System.out.println("  " + a.name + " at " + a.current + " (destination: " + a.destination + ")")
+        );
+
+        // Initialize node occupants
+        nodeOccupants.clear();
+        agents.forEach(a -> nodeOccupants.put(a.current, a.name));
+
+        // Simulation loop
+        simulationRunning = true;
+        int rounds = 0;
+        while (simulationRunning && !agents.isEmpty()) {
+            System.out.println("\n--- Round " + (++rounds) + " ---");
+            boolean anyMovement = false;
+
+            // Process agents in random order each round
+            Collections.shuffle(agents);
+            for (Agent agent : new ArrayList<>(agents)) {
+                if (agent.tryMove()) {
+                    anyMovement = true;
+                }
+
+                // Add delay for observability
+                try { Thread.sleep(1000); } catch (InterruptedException e) {}
+            }
+
+            // Deadlock detection and resolution
+            if (!anyMovement && !agents.isEmpty()) {
+                System.out.println("\nDEADLOCK DETECTED! Resolving...");
+                Agent stuckAgent = agents.get(0);
+                System.out.println("Resetting agent " + stuckAgent.name + " from " +
+                        stuckAgent.current + " to previous position");
+
+                if (stuckAgent.pathHistory.size() > 1) {
+                    String previousNode = stuckAgent.pathHistory.get(
+                            stuckAgent.pathHistory.size() - 2
+                    );
+                    nodeOccupants.remove(stuckAgent.current);
+                    stuckAgent.current = previousNode;
+                    nodeOccupants.put(previousNode, stuckAgent.name);
+                    stuckAgent.pathHistory.remove(stuckAgent.pathHistory.size() - 1);
+                }
+            }
+        }
+
+        System.out.println("\n=== Simulation Ended ===");
+        agents.clear();
+        nodeOccupants.clear();
     }
 }
