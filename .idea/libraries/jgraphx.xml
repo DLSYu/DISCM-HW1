@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="jgraphx">
+    <CLASSES>
+      <root url="jar://$USER_HOME$/Downloads/jgraphx-4.2.2/lib/jgraphx.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
