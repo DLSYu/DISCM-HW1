@@ -98,7 +98,7 @@ public class Main {
             = new DefaultDirectedGraph<>(DefaultEdge.class);
 
     private static boolean parallelComp = false;
-    private static final String file = "src/graph3.txt";
+    private static final String file = "src/graph-crossing-2";
 
     // New variables for agent simuulation
     private static Map<String, String> nodeOccupants = new ConcurrentHashMap<>();
@@ -1061,6 +1061,7 @@ public class Main {
         }
 
         System.out.println("\n=== Simulation Ended ===");
+        System.out.println("\nGraph Query: ");
         agents.clear();
         nodeOccupants.clear();
     }
